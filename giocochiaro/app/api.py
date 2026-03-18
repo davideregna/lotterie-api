@@ -410,7 +410,16 @@ def lo_ultime(n: int = Query(10, le=100)):
 
 
 @app.get("/api/lotto/statistiche")
-def lo_stats():
+def lo_stats(ruota: Optional[str] = None):
+    if ruota:
+        ruota_lower = ruota.lower()
+        ruote_valide = [
+            "bari", "cagliari", "firenze", "genova", "milano",
+            "napoli", "palermo", "roma", "torino", "venezia", "nazionale",
+        ]
+        if ruota_lower not in ruote_valide:
+            return {"errore": f"Ruota non valida. Valide: {', '.join(ruote_valide)}"}
+        return get_stats(f"lotto_{ruota_lower}")
     return get_stats("lotto")
 
 
@@ -697,12 +706,12 @@ def wfl_ultima(tipo: str):
         }
 
     with get_db_ctx() as conn:
-        row = conn.execute("SELECT * FROM winforlife WHERE tipo = ? ORDER BY data DESC LIMIT 1", (tipo,)).fetchone()
+        row = conn.execute("SELECT * FROM winforlife WHERE tipo = ? ORDER BY data DESC, ora DESC LIMIT 1", (tipo,)).fetchone()
     if not row:
         return {"errore": "Nessuna estrazione"}
     return {
         "lotteria": f"winforlife_{tipo}",
-        "concorso": row["concorso"], "data": row["data"],
+        "concorso": row["concorso"], "data": row["data"], "ora": row["ora"],
         "numeri": [row[f"n{i}"] for i in range(1, 11)],
         "numerone": row["numerone"],
     }
@@ -714,7 +723,7 @@ def wfl_archivio(tipo: str, limit: int = Query(100, le=10000), offset: int = 0):
         return {"errore": "Tipo non valido (classico/grattacieli)"}
     with get_db_ctx() as conn:
         rows = conn.execute(
-            "SELECT * FROM winforlife WHERE tipo = ? ORDER BY data DESC LIMIT ? OFFSET ?",
+            "SELECT * FROM winforlife WHERE tipo = ? ORDER BY data DESC, ora DESC LIMIT ? OFFSET ?",
             (tipo, limit, offset)
         ).fetchall()
         totale = conn.execute("SELECT COUNT(*) FROM winforlife WHERE tipo = ?", (tipo,)).fetchone()[0]
@@ -726,15 +735,122 @@ def wfl_ultime(tipo: str, n: int = Query(10, le=100)):
     if tipo not in ("classico", "grattacieli"):
         return {"errore": "Tipo non valido (classico/grattacieli)"}
     with get_db_ctx() as conn:
-        rows = conn.execute("SELECT * FROM winforlife WHERE tipo = ? ORDER BY data DESC LIMIT ?", (tipo, n)).fetchall()
+        rows = conn.execute("SELECT * FROM winforlife WHERE tipo = ? ORDER BY data DESC, ora DESC LIMIT ?", (tipo, n)).fetchall()
     return {
         "lotteria": f"winforlife_{tipo}",
         "estrazioni": [{
-            "concorso": r["concorso"], "data": r["data"],
+            "concorso": r["concorso"], "data": r["data"], "ora": r["ora"],
             "numeri": [r[f"n{i}"] for i in range(1, 11)],
             "numerone": r["numerone"],
         } for r in rows]
     }
+
+
+# ── Simbolotto ──────────────────────────────────────────────
+
+@app.get("/api/simbolotto/ultima")
+def simb_ultima():
+    live = get_live("Simbolotto")
+    if live:
+        raw = live["raw"]
+        return {
+            "lotteria": "simbolotto",
+            "data": live["data"],
+            "ruota": raw.get("ruota", ""),
+            "numeri": [int(n) for n in (raw.get("simbolotti") or [])],
+            "aggiornato_il": live["aggiornato_il"],
+        }
+
+    with get_db_ctx() as conn:
+        row = conn.execute("SELECT * FROM simbolotto ORDER BY data DESC LIMIT 1").fetchone()
+    if not row:
+        return {"errore": "Nessuna estrazione"}
+    return {
+        "lotteria": "simbolotto",
+        "data": row["data"], "ruota": row["ruota"],
+        "numeri": [row["n1"], row["n2"], row["n3"], row["n4"], row["n5"]],
+    }
+
+
+@app.get("/api/simbolotto/archivio")
+def simb_archivio(anno: Optional[int] = None, limit: int = Query(100, le=10000), offset: int = 0):
+    with get_db_ctx() as conn:
+        if anno:
+            rows = conn.execute(
+                "SELECT * FROM simbolotto WHERE data LIKE ? ORDER BY data DESC LIMIT ? OFFSET ?",
+                (f"{anno}-%", limit, offset)
+            ).fetchall()
+            totale = conn.execute("SELECT COUNT(*) FROM simbolotto WHERE data LIKE ?", (f"{anno}-%",)).fetchone()[0]
+        else:
+            rows = conn.execute("SELECT * FROM simbolotto ORDER BY data DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
+            totale = conn.execute("SELECT COUNT(*) FROM simbolotto").fetchone()[0]
+    return {"lotteria": "simbolotto", "totale": totale, "limit": limit, "offset": offset, "estrazioni": rows_to_list(rows)}
+
+
+@app.get("/api/simbolotto/ultime")
+def simb_ultime(n: int = Query(10, le=100)):
+    with get_db_ctx() as conn:
+        rows = conn.execute("SELECT * FROM simbolotto ORDER BY data DESC LIMIT ?", (n,)).fetchall()
+    return {
+        "lotteria": "simbolotto",
+        "estrazioni": [{
+            "concorso": r["concorso"], "data": r["data"], "ruota": r["ruota"],
+            "numeri": [r["n1"], r["n2"], r["n3"], r["n4"], r["n5"]],
+        } for r in rows]
+    }
+
+
+@app.get("/api/simbolotto/statistiche")
+def simb_stats():
+    return get_stats("simbolotto")
+
+
+# ── 10eLotto ogni 5 minuti (live) ──────────────────────────
+
+_10E5_URL = "https://www.10elotto5.it/wp-content/themes/twentysixteen-child/10elotto5/estrazioni10elotto5.php"
+_10e5_cache = {"data": None, "ts": 0}
+
+@app.get("/api/10elotto5min/ultime")
+def dl5_ultime():
+    """Ultime estrazioni 10eLotto ogni 5 minuti (live da 10elotto5.it)."""
+    import cloudscraper
+
+    # Cache 60 secondi per non bombardare la fonte
+    now = time.time()
+    if _10e5_cache["data"] and now - _10e5_cache["ts"] < 60:
+        return _10e5_cache["data"]
+
+    try:
+        scraper = cloudscraper.create_scraper()
+        r = scraper.get(_10E5_URL, timeout=10)
+        scraper.close()
+        if r.status_code != 200:
+            return {"errore": "Fonte non disponibile"}
+
+        raw = r.json()
+        estrazioni = []
+        for e in raw.get("estrazioni", []):
+            estrazioni.append({
+                "concorso": int(e.get("nestr", 0)),
+                "data": e.get("data", ""),
+                "ora": e.get("ora", "")[:5],
+                "numeri": [int(e.get(f"c{i}", 0)) for i in range(1, 21)],
+                "numero_oro": int(e.get("Oro", 0)),
+                "doppio_oro": int(e.get("dOro", 0)),
+                "extra": [int(e.get(f"e{i}", 0)) for i in range(1, 16)],
+            })
+
+        risposta = {
+            "lotteria": "10elotto5min",
+            "estrazioni": estrazioni,
+            "totale": len(estrazioni),
+        }
+        _10e5_cache["data"] = risposta
+        _10e5_cache["ts"] = now
+        return risposta
+
+    except Exception as ex:
+        return {"errore": f"Errore recupero dati: {ex}"}
 
 
 # ── Globali ─────────────────────────────────────────────────
@@ -751,7 +867,55 @@ def tutte_ultime():
         "sivincetutto": svt_ultima(),
         "winforlife_classico": wfl_ultima("classico"),
         "winforlife_grattacieli": wfl_ultima("grattacieli"),
+        "simbolotto": simb_ultima(),
     }
+
+
+@app.get("/api/tutte/statistiche")
+def tutte_stats(limit: int = Query(10, ge=1, le=90), gioco: str = Query(None)):
+    with get_db_ctx() as conn:
+        if gioco:
+            rows = conn.execute(
+                "SELECT * FROM statistiche WHERE lotteria = ? ORDER BY numero ASC",
+                (gioco,)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM statistiche ORDER BY lotteria ASC, numero ASC"
+            ).fetchall()
+
+    if not rows:
+        return {"errore": "Statistiche non calcolate"}
+
+    per_gioco = {}
+    for r in rows:
+        d = dict(r)
+        lot = d["lotteria"]
+        if lot not in per_gioco:
+            per_gioco[lot] = {"aggiornato_il": d["aggiornato_il"], "numeri": []}
+        per_gioco[lot]["numeri"].append(d)
+
+    risultato = {}
+    for lot, info in per_gioco.items():
+        numeri = info["numeri"]
+        risultato[lot] = {
+            "lotteria": lot,
+            "aggiornato_il": info["aggiornato_il"],
+            "top_ritardatari": sorted(numeri, key=lambda x: x["ritardo_attuale"], reverse=True)[:limit],
+            "top_frequenti": sorted(numeri, key=lambda x: x["frequenza"], reverse=True)[:limit],
+        }
+
+    return risultato
+
+
+@app.get("/api/ricalcola")
+def ricalcola(request: Request):
+    client = request.client.host
+    if client not in ("127.0.0.1", "::1"):
+        return JSONResponse(status_code=403, content={"errore": "Solo localhost"})
+    from app.stats import calcola_tutte
+    calcola_tutte()
+    return {"stato": "ok", "messaggio": "Statistiche ricalcolate"}
 
 
 @app.get("/api/stato")

@@ -12,5 +12,6 @@ INTERVALLO_RETRY = 60
 
 TABELLE_VALIDE = {
     "millionday", "superenalotto", "lotto", "diecelotto",
-    "vincicasa", "eurojackpot", "sivincetutto", "winforlife"
+    "vincicasa", "eurojackpot", "sivincetutto", "winforlife",
+    "simbolotto"
 }

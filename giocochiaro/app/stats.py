@@ -3,7 +3,7 @@ from app.database import get_db_ctx
 from app.config import TABELLE_VALIDE
 
 
-def calcola_stats(lotteria, tabella, max_numero, colonne_numeri):
+def calcola_stats(lotteria, tabella, max_numero, colonne_numeri, where=""):
     if tabella not in TABELLE_VALIDE:
         raise ValueError(f"Tabella non valida: {tabella}")
 
@@ -12,10 +12,13 @@ def calcola_stats(lotteria, tabella, max_numero, colonne_numeri):
 
         if lotteria == "millionday":
             order = "ORDER BY data ASC, ora ASC"
+        elif tabella == "winforlife":
+            order = "ORDER BY data ASC, ora ASC"
         else:
             order = "ORDER BY data ASC"
 
-        c.execute(f"SELECT data, {colonne_numeri} FROM {tabella} {order}")
+        sql = f"SELECT data, {colonne_numeri} FROM {tabella} {where} {order}"
+        c.execute(sql)
         rows = c.fetchall()
 
         if not rows:
@@ -70,8 +73,22 @@ def calcola_superenalotto():
     calcola_stats("superenalotto", "superenalotto", 90, "n1, n2, n3, n4, n5, n6")
 
 
+RUOTE_LOTTO = [
+    "Bari", "Cagliari", "Firenze", "Genova", "Milano",
+    "Napoli", "Palermo", "Roma", "Torino", "Venezia", "Nazionale",
+]
+
+
 def calcola_lotto():
     calcola_stats("lotto", "lotto", 90, "n1, n2, n3, n4, n5")
+
+
+def calcola_lotto_ruote():
+    for ruota in RUOTE_LOTTO:
+        calcola_stats(
+            f"lotto_{ruota.lower()}", "lotto", 90,
+            "n1, n2, n3, n4, n5", f"WHERE ruota = '{ruota}'"
+        )
 
 
 def calcola_diecelotto():
@@ -91,15 +108,33 @@ def calcola_sivincetutto():
     calcola_stats("sivincetutto", "sivincetutto", 90, "n1, n2, n3, n4, n5, n6")
 
 
+def calcola_winforlife_classico():
+    col = ", ".join([f"n{i}" for i in range(1, 11)])
+    calcola_stats("winforlife_classico", "winforlife", 20, col, "WHERE tipo = 'classico'")
+
+
+def calcola_winforlife_grattacieli():
+    col = ", ".join([f"n{i}" for i in range(1, 11)])
+    calcola_stats("winforlife_grattacieli", "winforlife", 20, col, "WHERE tipo = 'grattacieli'")
+
+
+def calcola_simbolotto():
+    calcola_stats("simbolotto", "simbolotto", 45, "n1, n2, n3, n4, n5")
+
+
 def calcola_tutte():
     print("\n=== CALCOLO STATISTICHE ===\n")
     calcola_millionday()
     calcola_superenalotto()
     calcola_lotto()
+    calcola_lotto_ruote()
     calcola_diecelotto()
     calcola_vincicasa()
     calcola_eurojackpot()
     calcola_sivincetutto()
+    calcola_winforlife_classico()
+    calcola_winforlife_grattacieli()
+    calcola_simbolotto()
     print("\n=== FATTO ===")
 
 

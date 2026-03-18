@@ -265,6 +265,18 @@ def fetch_lotto(scraper: cloudscraper.CloudScraper) -> list[Estrazione]:
     print(f"  OK Lotto - {len(estrazioni_ruote)} ruote")
     risultati.append(lotto)
 
+    # ── Simbolotto
+    simbolotti = data.get("simbolotti")
+    if simbolotti:
+        simb_numeri = simbolotti.get("simbolotti", [])
+        if simb_numeri:
+            simb = Estrazione(gioco="Simbolotto", data=data_fmt)
+            simb.raw_data = simbolotti
+            simb.numeri = [int(n) for n in simb_numeri]
+            simb.ruote = {"ruota": simbolotti.get("ruota", "")}
+            print(f"  OK Simbolotto - {len(simb.numeri)} numeri (ruota {simbolotti.get('ruota', '?')})")
+            risultati.append(simb)
+
     # ── 10eLotto
     numeri_vincenti = data.get("numeriVincenti")
     if numeri_vincenti:

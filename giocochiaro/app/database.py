@@ -118,12 +118,25 @@ def init_db():
                 tipo TEXT NOT NULL,
                 concorso INTEGER DEFAULT 0,
                 data TEXT NOT NULL,
+                ora TEXT NOT NULL DEFAULT '',
                 n1 INTEGER NOT NULL, n2 INTEGER NOT NULL, n3 INTEGER NOT NULL,
                 n4 INTEGER NOT NULL, n5 INTEGER NOT NULL, n6 INTEGER NOT NULL,
                 n7 INTEGER NOT NULL, n8 INTEGER NOT NULL, n9 INTEGER NOT NULL,
                 n10 INTEGER NOT NULL,
                 numerone INTEGER DEFAULT 0,
-                UNIQUE(data, tipo)
+                UNIQUE(data, tipo, ora)
+            )
+        """)
+
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS simbolotto (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                concorso INTEGER DEFAULT 0,
+                data TEXT NOT NULL,
+                ruota TEXT NOT NULL DEFAULT '',
+                n1 INTEGER NOT NULL, n2 INTEGER NOT NULL, n3 INTEGER NOT NULL,
+                n4 INTEGER NOT NULL, n5 INTEGER NOT NULL,
+                UNIQUE(data)
             )
         """)
 
@@ -160,6 +173,7 @@ def init_db():
         c.execute("CREATE INDEX IF NOT EXISTS idx_ej_data ON eurojackpot(data DESC)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_svt_data ON sivincetutto(data DESC)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_wfl_data ON winforlife(data DESC, tipo)")
+        c.execute("CREATE INDEX IF NOT EXISTS idx_simb_data ON simbolotto(data DESC)")
         c.execute("CREATE INDEX IF NOT EXISTS idx_stats ON statistiche(lotteria, numero)")
 
         conn.commit()

@@ -179,10 +179,16 @@ def importa_superenalotto():
 
 
 def importa_lotto():
+    """Importa lotto.txt in formato xamig: Concorso\tData\tBari_nums\tCagliari_nums\t..."""
     filepath = os.path.join(DATA_DIR, "lotto.txt")
     if not os.path.exists(filepath):
         print("data/lotto.txt non trovato, skip.")
         return
+
+    from datetime import datetime
+
+    ruote_nomi = ["Bari", "Cagliari", "Firenze", "Genova", "Milano",
+                  "Napoli", "Palermo", "Roma", "Torino", "Venezia", "Nazionale"]
 
     with get_db_ctx() as conn:
         c = conn.cursor()
@@ -194,27 +200,32 @@ def importa_lotto():
                 line = line.strip()
                 if not line:
                     continue
+                parts = line.split("\t")
+                if not parts[0].strip().isdigit():
+                    continue
                 try:
-                    if "\t" in line:
-                        parts = line.split("\t")
-                    elif ";" in line:
-                        parts = line.split(";")
-                    else:
-                        parts = line.split(",")
-                    parts = [p.strip() for p in parts if p.strip()]
-                    if len(parts) >= 7:
-                        ruota = parts[0]
-                        data = parts[1]
-                        numeri = [int(parts[2 + i]) for i in range(5)]
-                        batch.append((data, ruota, *numeri))
-                        if len(batch) >= BATCH_SIZE:
-                            c.executemany("""
-                                INSERT OR IGNORE INTO lotto
-                                (data, ruota, n1, n2, n3, n4, n5)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)
-                            """, batch)
-                            importati += c.rowcount
-                            batch.clear()
+                    data_raw = parts[1].strip()
+                    data = datetime.strptime(data_raw, "%d/%m/%Y").strftime("%Y-%m-%d")
+
+                    # Ogni ruota è nella colonna parts[2+i] con numeri separati da spazi
+                    for i, ruota in enumerate(ruote_nomi):
+                        if 2 + i >= len(parts):
+                            break
+                        campo = parts[2 + i].strip()
+                        if not campo:
+                            continue
+                        nums = [int(x) for x in campo.split() if x.isdigit()]
+                        if len(nums) == 5:
+                            batch.append((data, ruota, *nums))
+
+                    if len(batch) >= BATCH_SIZE:
+                        c.executemany("""
+                            INSERT OR IGNORE INTO lotto
+                            (data, ruota, n1, n2, n3, n4, n5)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, batch)
+                        importati += c.rowcount
+                        batch.clear()
                 except (ValueError, IndexError):
                     continue
 
@@ -233,10 +244,13 @@ def importa_lotto():
 
 
 def importa_diecelotto():
+    """Importa 10elotto.txt in formato xamig: Concorso\tData\tN.1..N.20\tOro\tOro2\tExtra..."""
     filepath = os.path.join(DATA_DIR, "10elotto.txt")
     if not os.path.exists(filepath):
         print("data/10elotto.txt non trovato, skip.")
         return
+
+    from datetime import datetime
 
     with get_db_ctx() as conn:
         c = conn.cursor()
@@ -247,30 +261,45 @@ def importa_diecelotto():
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
                 line = line.strip()
-                if not line or not line[0].isdigit():
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if not parts[0].strip().isdigit():
                     continue
                 try:
-                    if "\t" in line:
-                        parts = line.split("\t")
-                    elif ";" in line:
-                        parts = line.split(";")
-                    else:
-                        parts = line.split(",")
-                    parts = [p.strip() for p in parts if p.strip()]
-                    if len(parts) >= 21:
-                        data = parts[0]
-                        numeri = [int(parts[1 + i]) for i in range(20)]
-                        numero_oro = int(parts[21]) if len(parts) > 21 else 0
-                        doppio_oro = int(parts[22]) if len(parts) > 22 else 0
-                        batch.append((data, *numeri, numero_oro, doppio_oro))
-                        if len(batch) >= BATCH_SIZE:
-                            c.executemany(f"""
-                                INSERT OR IGNORE INTO diecelotto
-                                (data, {col_numeri}, numero_oro, doppio_oro)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                            """, batch)
-                            importati += c.rowcount
-                            batch.clear()
+                    # parts[0]=concorso, parts[1]=data, parts[2..21]=20 numeri
+                    data_raw = parts[1].strip()
+                    data = datetime.strptime(data_raw, "%d/%m/%Y").strftime("%Y-%m-%d")
+
+                    numeri = []
+                    for i in range(2, min(22, len(parts))):
+                        v = parts[i].strip()
+                        if v and v != "-" and v.isdigit():
+                            numeri.append(int(v))
+                    if len(numeri) != 20:
+                        continue
+
+                    # Numero Oro (parts[22]) e Doppio Oro (parts[23])
+                    numero_oro = 0
+                    doppio_oro = 0
+                    if len(parts) > 22:
+                        v = parts[22].strip()
+                        if v and v != "-" and v.isdigit():
+                            numero_oro = int(v)
+                    if len(parts) > 23:
+                        v = parts[23].strip()
+                        if v and v != "-" and v.isdigit():
+                            doppio_oro = int(v)
+
+                    batch.append((data, *numeri, numero_oro, doppio_oro))
+                    if len(batch) >= BATCH_SIZE:
+                        c.executemany(f"""
+                            INSERT OR IGNORE INTO diecelotto
+                            (data, {col_numeri}, numero_oro, doppio_oro)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, batch)
+                        importati += c.rowcount
+                        batch.clear()
                 except (ValueError, IndexError):
                     continue
 
@@ -288,6 +317,321 @@ def importa_diecelotto():
     print(f"10eLotto: {importati} importate, {totale} totali nel DB.")
 
 
+def importa_eurojackpot():
+    filepath = os.path.join(DATA_DIR, "eurojackpot.txt")
+    if not os.path.exists(filepath):
+        print("data/eurojackpot.txt non trovato, skip.")
+        return
+
+    with get_db_ctx() as conn:
+        c = conn.cursor()
+        batch = []
+        importati = 0
+
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if not parts[0].strip().isdigit():
+                    continue
+                try:
+                    concorso = int(parts[0].strip())
+                    data_raw = parts[1].strip()
+                    from datetime import datetime
+                    data = datetime.strptime(data_raw, "%d/%m/%Y").strftime("%Y-%m-%d")
+                    numeri = [int(parts[2 + i].strip()) for i in range(5)]
+                    e1 = int(parts[7].strip())
+                    e2 = int(parts[8].strip())
+                    batch.append((concorso, data, *numeri, e1, e2))
+                    if len(batch) >= BATCH_SIZE:
+                        c.executemany("""
+                            INSERT OR IGNORE INTO eurojackpot
+                            (concorso, data, n1, n2, n3, n4, n5, e1, e2)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, batch)
+                        importati += c.rowcount
+                        batch.clear()
+                except (ValueError, IndexError):
+                    continue
+
+        if batch:
+            c.executemany("""
+                INSERT OR IGNORE INTO eurojackpot
+                (concorso, data, n1, n2, n3, n4, n5, e1, e2)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, batch)
+            importati += c.rowcount
+
+        conn.commit()
+        totale = c.execute("SELECT COUNT(*) FROM eurojackpot").fetchone()[0]
+
+    print(f"Eurojackpot: {importati} importate, {totale} totali nel DB.")
+
+
+def importa_vincicasa():
+    filepath = os.path.join(DATA_DIR, "vincicasa.txt")
+    if not os.path.exists(filepath):
+        print("data/vincicasa.txt non trovato, skip.")
+        return
+
+    with get_db_ctx() as conn:
+        c = conn.cursor()
+        batch = []
+        importati = 0
+
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if not parts[0].strip().isdigit():
+                    continue
+                try:
+                    concorso = int(parts[0].strip())
+                    data_raw = parts[1].strip()
+                    from datetime import datetime
+                    data = datetime.strptime(data_raw, "%d/%m/%Y").strftime("%Y-%m-%d")
+                    numeri = [int(parts[2 + i].strip()) for i in range(5)]
+                    batch.append((concorso, data, *numeri))
+                    if len(batch) >= BATCH_SIZE:
+                        c.executemany("""
+                            INSERT OR IGNORE INTO vincicasa
+                            (concorso, data, n1, n2, n3, n4, n5)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """, batch)
+                        importati += c.rowcount
+                        batch.clear()
+                except (ValueError, IndexError):
+                    continue
+
+        if batch:
+            c.executemany("""
+                INSERT OR IGNORE INTO vincicasa
+                (concorso, data, n1, n2, n3, n4, n5)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, batch)
+            importati += c.rowcount
+
+        conn.commit()
+        totale = c.execute("SELECT COUNT(*) FROM vincicasa").fetchone()[0]
+
+    print(f"VinciCasa: {importati} importate, {totale} totali nel DB.")
+
+
+def importa_sivincetutto():
+    filepath = os.path.join(DATA_DIR, "sivincetutto.txt")
+    if not os.path.exists(filepath):
+        print("data/sivincetutto.txt non trovato, skip.")
+        return
+
+    with get_db_ctx() as conn:
+        c = conn.cursor()
+        batch = []
+        importati = 0
+
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if not parts[0].strip().isdigit():
+                    continue
+                try:
+                    concorso = int(parts[0].strip())
+                    data_raw = parts[1].strip()
+                    from datetime import datetime
+                    data = datetime.strptime(data_raw, "%d/%m/%Y").strftime("%Y-%m-%d")
+                    numeri = [int(parts[2 + i].strip()) for i in range(6)]
+                    batch.append((concorso, data, *numeri))
+                    if len(batch) >= BATCH_SIZE:
+                        c.executemany("""
+                            INSERT OR IGNORE INTO sivincetutto
+                            (concorso, data, n1, n2, n3, n4, n5, n6)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, batch)
+                        importati += c.rowcount
+                        batch.clear()
+                except (ValueError, IndexError):
+                    continue
+
+        if batch:
+            c.executemany("""
+                INSERT OR IGNORE INTO sivincetutto
+                (concorso, data, n1, n2, n3, n4, n5, n6)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, batch)
+            importati += c.rowcount
+
+        conn.commit()
+        totale = c.execute("SELECT COUNT(*) FROM sivincetutto").fetchone()[0]
+
+    print(f"SiVinceTutto: {importati} importate, {totale} totali nel DB.")
+
+
+def importa_winforlife():
+    filepath = os.path.join(DATA_DIR, "winforlife.txt")
+    if not os.path.exists(filepath):
+        print("data/winforlife.txt non trovato, skip.")
+        return
+
+    with get_db_ctx() as conn:
+        c = conn.cursor()
+        batch = []
+        importati = 0
+
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if not parts[0].strip().isdigit():
+                    continue
+                try:
+                    concorso = int(parts[0].strip())
+                    data_raw = parts[1].strip()
+                    from datetime import datetime
+                    data = datetime.strptime(data_raw, "%d/%m/%Y").strftime("%Y-%m-%d")
+                    ora = parts[2].strip() if len(parts) > 2 else ""
+                    numeri = [int(parts[3 + i].strip()) for i in range(10)]
+                    numerone = int(parts[13].strip()) if len(parts) > 13 else 0
+                    # Dati xamig = Grattacieli (17 estrazioni/giorno)
+                    batch.append(("grattacieli", concorso, data, ora, *numeri, numerone))
+                    if len(batch) >= BATCH_SIZE:
+                        c.executemany("""
+                            INSERT OR IGNORE INTO winforlife
+                            (tipo, concorso, data, ora, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, numerone)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, batch)
+                        importati += c.rowcount
+                        batch.clear()
+                except (ValueError, IndexError):
+                    continue
+
+        if batch:
+            c.executemany("""
+                INSERT OR IGNORE INTO winforlife
+                (tipo, concorso, data, ora, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, numerone)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, batch)
+            importati += c.rowcount
+
+        conn.commit()
+        totale = c.execute("SELECT COUNT(*) FROM winforlife").fetchone()[0]
+
+    print(f"WinForLife: {importati} importate, {totale} totali nel DB.")
+
+
+def importa_winforlife_classico():
+    filepath = os.path.join(DATA_DIR, "winforlife_classico.txt")
+    if not os.path.exists(filepath):
+        print("data/winforlife_classico.txt non trovato, skip.")
+        return
+
+    with get_db_ctx() as conn:
+        c = conn.cursor()
+        batch = []
+        importati = 0
+
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if not parts[0].strip().isdigit():
+                    continue
+                try:
+                    concorso = int(parts[0].strip())
+                    data_raw = parts[1].strip()
+                    from datetime import datetime
+                    data = datetime.strptime(data_raw, "%d/%m/%Y").strftime("%Y-%m-%d")
+                    ora = parts[2].strip() if len(parts) > 2 else ""
+                    numeri = [int(parts[3 + i].strip()) for i in range(10)]
+                    numerone = int(parts[13].strip()) if len(parts) > 13 else 0
+                    batch.append(("classico", concorso, data, ora, *numeri, numerone))
+                    if len(batch) >= BATCH_SIZE:
+                        c.executemany("""
+                            INSERT OR IGNORE INTO winforlife
+                            (tipo, concorso, data, ora, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, numerone)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, batch)
+                        importati += c.rowcount
+                        batch.clear()
+                except (ValueError, IndexError):
+                    continue
+
+        if batch:
+            c.executemany("""
+                INSERT OR IGNORE INTO winforlife
+                (tipo, concorso, data, ora, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, numerone)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, batch)
+            importati += c.rowcount
+
+        conn.commit()
+        totale_c = c.execute("SELECT COUNT(*) FROM winforlife WHERE tipo='classico'").fetchone()[0]
+
+    print(f"WinForLife Classico: {importati} importate, {totale_c} totali nel DB.")
+
+
+def importa_simbolotto():
+    filepath = os.path.join(DATA_DIR, "simbolotto.txt")
+    if not os.path.exists(filepath):
+        print("data/simbolotto.txt non trovato, skip.")
+        return
+
+    from datetime import datetime
+
+    with get_db_ctx() as conn:
+        c = conn.cursor()
+        batch = []
+        importati = 0
+
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if not parts[0].strip().isdigit():
+                    continue
+                try:
+                    concorso = int(parts[0].strip())
+                    data_raw = parts[1].strip()
+                    data = datetime.strptime(data_raw, "%d/%m/%Y").strftime("%Y-%m-%d")
+                    ruota = parts[2].strip() if len(parts) > 2 else ""
+                    numeri = [int(parts[3 + i].strip()) for i in range(5)]
+                    batch.append((concorso, data, ruota, *numeri))
+                    if len(batch) >= BATCH_SIZE:
+                        c.executemany("""
+                            INSERT OR IGNORE INTO simbolotto
+                            (concorso, data, ruota, n1, n2, n3, n4, n5)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, batch)
+                        importati += c.rowcount
+                        batch.clear()
+                except (ValueError, IndexError):
+                    continue
+
+        if batch:
+            c.executemany("""
+                INSERT OR IGNORE INTO simbolotto
+                (concorso, data, ruota, n1, n2, n3, n4, n5)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, batch)
+            importati += c.rowcount
+
+        conn.commit()
+        totale = c.execute("SELECT COUNT(*) FROM simbolotto").fetchone()[0]
+
+    print(f"Simbolotto: {importati} importate, {totale} totali nel DB.")
+
+
 def importa_tutto():
     init_db()
     print("\n=== IMPORT ARCHIVI ===\n")
@@ -295,6 +639,12 @@ def importa_tutto():
     importa_superenalotto()
     importa_lotto()
     importa_diecelotto()
+    importa_eurojackpot()
+    importa_vincicasa()
+    importa_sivincetutto()
+    importa_winforlife()
+    importa_winforlife_classico()
+    importa_simbolotto()
     print("\n=== COMPLETATO ===")
 
 

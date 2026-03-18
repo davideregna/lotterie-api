@@ -208,13 +208,38 @@ def salva_winforlife(e) -> bool:
     else:
         return False
 
+    ora = _parse_ora(e.data) if " " in e.data.strip() else ""
+
     with get_db_ctx() as conn:
         c = conn.cursor()
         c.execute("""
             INSERT OR IGNORE INTO winforlife
-            (tipo, concorso, data, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, numerone)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (tipo, _concorso_int(e.concorso), data, *e.numeri, e.numerone or 0))
+            (tipo, concorso, data, ora, n1, n2, n3, n4, n5, n6, n7, n8, n9, n10, numerone)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (tipo, _concorso_int(e.concorso), data, ora, *e.numeri, e.numerone or 0))
+        conn.commit()
+        return c.rowcount > 0
+
+
+def salva_simbolotto(e) -> bool:
+    if len(e.numeri) != 5:
+        return False
+    data = _parse_data(e.data)
+    if not data:
+        return False
+
+    ruota = ""
+    if hasattr(e, "ruote") and isinstance(e.ruote, dict):
+        ruota = e.ruote.get("ruota", "")
+    elif hasattr(e, "raw_data") and isinstance(e.raw_data, dict):
+        ruota = e.raw_data.get("ruota", "")
+
+    with get_db_ctx() as conn:
+        c = conn.cursor()
+        c.execute("""
+            INSERT OR IGNORE INTO simbolotto (concorso, data, ruota, n1, n2, n3, n4, n5)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (_concorso_int(e.concorso), data, ruota, *e.numeri))
         conn.commit()
         return c.rowcount > 0
 
@@ -229,19 +254,25 @@ SALVA_MAP = {
     "SiVinceTutto": salva_sivincetutto,
     "Win for Life Classico": salva_winforlife,
     "Win for Life Grattacieli": salva_winforlife,
+    "Simbolotto": salva_simbolotto,
 }
 
 
 def salva_estrazione(e) -> bool:
-    """Salva nell'archivio + aggiorna i dati live."""
+    """Salva nell'archivio DB + aggiorna i dati live + appende al file .txt."""
     # Salva sempre il JSON live
     salva_live(e)
 
-    # Salva nell'archivio
+    # Salva nell'archivio DB
     fn = SALVA_MAP.get(e.gioco)
     if fn:
         try:
-            return fn(e)
+            nuova = fn(e)
+            # Se è una nuova estrazione, appende anche al file .txt
+            if nuova:
+                from app.txt_append import append_estrazione
+                append_estrazione(e)
+            return nuova
         except Exception as ex:
             print(f"  ERRORE salvataggio {e.gioco}: {ex}")
             return False
