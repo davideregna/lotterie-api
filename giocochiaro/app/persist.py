@@ -31,17 +31,28 @@ def _concorso_int(concorso) -> int:
 # ── Live data (JSON completo) ──────────────────────────────────────
 
 def salva_live(e) -> None:
-    """Salva il JSON grezzo nella tabella live_data per gli endpoint /ultima."""
+    """Salva il JSON grezzo nella tabella live_data per gli endpoint /ultima.
+
+    Aggiorna aggiornato_il SOLO se i dati sono effettivamente cambiati.
+    """
     if not e.raw_data:
         return
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
     data = _parse_data(e.data) or ""
+    new_json = json.dumps(e.raw_data, ensure_ascii=False)
 
     with get_db_ctx() as conn:
+        row = conn.execute(
+            "SELECT raw_json FROM live_data WHERE gioco = ?", (e.gioco,)
+        ).fetchone()
+
+        if row and json.loads(row["raw_json"]) == e.raw_data:
+            return
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
         conn.execute("""
             INSERT OR REPLACE INTO live_data (gioco, data, raw_json, aggiornato_il)
             VALUES (?, ?, ?, ?)
-        """, (e.gioco, data, json.dumps(e.raw_data, ensure_ascii=False), now))
+        """, (e.gioco, data, new_json, now))
         conn.commit()
 
 

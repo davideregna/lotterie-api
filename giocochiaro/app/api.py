@@ -808,7 +808,7 @@ def simb_stats():
 # ── 10eLotto ogni 5 minuti (live) ──────────────────────────
 
 _10E5_URL = "https://www.10elotto5.it/wp-content/themes/twentysixteen-child/10elotto5/estrazioni10elotto5.php"
-_10e5_cache = {"data": None, "ts": 0}
+_10e5_cache = {"data": None, "ts": 0, "estrazioni_prec": None, "aggiornato_il": None}
 
 @app.get("/api/10elotto5min/ultime")
 def dl5_ultime():
@@ -840,10 +840,16 @@ def dl5_ultime():
                 "extra": [int(e.get(f"e{i}", 0)) for i in range(1, 16)],
             })
 
+        # Aggiorna aggiornato_il solo se i dati sono effettivamente cambiati
+        if estrazioni != _10e5_cache["estrazioni_prec"]:
+            _10e5_cache["aggiornato_il"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            _10e5_cache["estrazioni_prec"] = estrazioni
+
         risposta = {
             "lotteria": "10elotto5min",
             "estrazioni": estrazioni,
             "totale": len(estrazioni),
+            "aggiornato_il": _10e5_cache["aggiornato_il"],
         }
         _10e5_cache["data"] = risposta
         _10e5_cache["ts"] = now
