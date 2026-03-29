@@ -7,6 +7,7 @@ from typing import Optional
 from app.database import get_db_ctx, init_db
 from app.config import TABELLE_VALIDE
 from app.persist import get_live, salva_estrazione
+import json as _json
 import hmac
 import hashlib
 import time
@@ -247,6 +248,37 @@ def md_stats():
 
 # ── SuperEnalotto ───────────────────────────────────────────
 
+
+def _se_row_to_dict(r) -> dict:
+    """Converte una riga DB superenalotto in dict con jackpot/vincite se presenti."""
+    d = {
+        "concorso": r["concorso"], "data": r["data"],
+        "numeri": [r["n1"], r["n2"], r["n3"], r["n4"], r["n5"], r["n6"]],
+        "jolly": r["jolly"], "superstar": r["superstar"],
+    }
+    jackpot = r["jackpot"] if r["jackpot"] else 0
+    if jackpot:
+        d["jackpot_centesimi"] = jackpot
+        d["jackpot_euro"] = _fmt_importo(jackpot)
+    montepremi_raw = r["montepremi_json"]
+    if montepremi_raw:
+        mp = _json.loads(montepremi_raw)
+        d["montepremi"] = {
+            "totale_centesimi": mp.get("montepremiTotale", 0),
+            "totale_euro": _fmt_importo(mp.get("montepremiTotale", 0)),
+            "concorso_centesimi": mp.get("montepremiConcorso", 0),
+            "concorso_euro": _fmt_importo(mp.get("montepremiConcorso", 0)),
+        }
+    vincite_raw = r["vincite_json"]
+    if vincite_raw:
+        det = _json.loads(vincite_raw)
+        d["vincite"] = _parse_vincite_gntn(det.get("vincite", []))
+        d["totale_vincite"] = int(det.get("numeroTotaleVincite", 0))
+        d["importo_totale_vincite_centesimi"] = det.get("importoTotaleVincite", 0)
+        d["importo_totale_vincite_euro"] = _fmt_importo(det.get("importoTotaleVincite", 0))
+    return d
+
+
 @app.get("/api/superenalotto/ultima")
 def se_ultima():
     live = get_live("SuperEnalotto")
@@ -284,12 +316,7 @@ def se_ultima():
         row = conn.execute("SELECT * FROM superenalotto ORDER BY data DESC LIMIT 1").fetchone()
     if not row:
         return {"errore": "Nessuna estrazione"}
-    return {
-        "lotteria": "superenalotto",
-        "concorso": row["concorso"], "data": row["data"],
-        "numeri": [row["n1"], row["n2"], row["n3"], row["n4"], row["n5"], row["n6"]],
-        "jolly": row["jolly"], "superstar": row["superstar"],
-    }
+    return _se_row_to_dict(row)
 
 
 @app.get("/api/superenalotto/archivio")
@@ -309,7 +336,8 @@ def se_archivio(anno: Optional[int] = None, limit: int = Query(100, le=10000), o
                 (limit, offset)
             ).fetchall()
             totale = conn.execute("SELECT COUNT(*) FROM superenalotto").fetchone()[0]
-    return {"lotteria": "superenalotto", "totale": totale, "limit": limit, "offset": offset, "estrazioni": rows_to_list(rows)}
+    return {"lotteria": "superenalotto", "totale": totale, "limit": limit, "offset": offset,
+            "estrazioni": [_se_row_to_dict(r) for r in rows]}
 
 
 @app.get("/api/superenalotto/ultime")
@@ -318,11 +346,7 @@ def se_ultime(n: int = Query(10, le=100)):
         rows = conn.execute("SELECT * FROM superenalotto ORDER BY data DESC LIMIT ?", (n,)).fetchall()
     return {
         "lotteria": "superenalotto",
-        "estrazioni": [{
-            "concorso": r["concorso"], "data": r["data"],
-            "numeri": [r["n1"], r["n2"], r["n3"], r["n4"], r["n5"], r["n6"]],
-            "jolly": r["jolly"], "superstar": r["superstar"],
-        } for r in rows]
+        "estrazioni": [_se_row_to_dict(r) for r in rows]
     }
 
 
@@ -464,6 +488,24 @@ def dl_stats():
     return get_stats("10elotto")
 
 
+def _vc_row_to_dict(r) -> dict:
+    d = {
+        "concorso": r["concorso"], "data": r["data"],
+        "numeri": [r["n1"], r["n2"], r["n3"], r["n4"], r["n5"]],
+    }
+    montepremi_raw = r["montepremi_json"]
+    if montepremi_raw:
+        mp = _json.loads(montepremi_raw)
+        d["montepremi_centesimi"] = mp.get("montepremiTotale", 0)
+        d["montepremi_euro"] = _fmt_importo(mp.get("montepremiTotale", 0))
+    vincite_raw = r["vincite_json"]
+    if vincite_raw:
+        det = _json.loads(vincite_raw)
+        d["vincite"] = _parse_vincite_gntn(det.get("vincite", []))
+        d["totale_vincite"] = int(det.get("numeroTotaleVincite", 0))
+    return d
+
+
 # ── VinciCasa ───────────────────────────────────────────────
 
 @app.get("/api/vincicasa/ultima")
@@ -494,11 +536,7 @@ def vc_ultima():
         row = conn.execute("SELECT * FROM vincicasa ORDER BY data DESC LIMIT 1").fetchone()
     if not row:
         return {"errore": "Nessuna estrazione"}
-    return {
-        "lotteria": "vincicasa",
-        "concorso": row["concorso"], "data": row["data"],
-        "numeri": [row["n1"], row["n2"], row["n3"], row["n4"], row["n5"]],
-    }
+    return {"lotteria": "vincicasa", **_vc_row_to_dict(row)}
 
 
 @app.get("/api/vincicasa/archivio")
@@ -513,7 +551,7 @@ def vc_archivio(anno: Optional[int] = None, limit: int = Query(100, le=10000), o
         else:
             rows = conn.execute("SELECT * FROM vincicasa ORDER BY data DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
             totale = conn.execute("SELECT COUNT(*) FROM vincicasa").fetchone()[0]
-    return {"lotteria": "vincicasa", "totale": totale, "limit": limit, "offset": offset, "estrazioni": rows_to_list(rows)}
+    return {"lotteria": "vincicasa", "totale": totale, "limit": limit, "offset": offset, "estrazioni": [_vc_row_to_dict(r) for r in rows]}
 
 
 @app.get("/api/vincicasa/ultime")
@@ -522,19 +560,186 @@ def vc_ultime(n: int = Query(10, le=100)):
         rows = conn.execute("SELECT * FROM vincicasa ORDER BY data DESC LIMIT ?", (n,)).fetchall()
     return {
         "lotteria": "vincicasa",
-        "estrazioni": [{
-            "concorso": r["concorso"], "data": r["data"],
-            "numeri": [r["n1"], r["n2"], r["n3"], r["n4"], r["n5"]],
-        } for r in rows]
+        "estrazioni": [_vc_row_to_dict(r) for r in rows]
     }
 
 
 @app.get("/api/vincicasa/statistiche")
 def vc_stats():
-    return get_stats("vincicasa")
+    base = get_stats("vincicasa")
+
+    with get_db_ctx() as conn:
+        rows = conn.execute(
+            "SELECT concorso, data, n1, n2, n3, n4, n5, vincite_json FROM vincicasa WHERE vincite_json IS NOT NULL"
+        ).fetchall()
+
+    tipo_map = {"14": "5", "13": "4", "12": "3", "11": "2"}
+    stats = {c: {"totale_vincite": 0, "totale_importo": 0, "con_vincita": 0,
+                  "quota_min": None, "quota_max": 0} for c in ["5", "4", "3", "2"]}
+    case_vinte = []
+
+    for r in rows:
+        det = _json.loads(r["vincite_json"])
+        for v in det.get("vincite", []):
+            quota = v.get("quota", {})
+            cat = tipo_map.get(quota.get("categoriaVincita", {}).get("tipo", ""))
+            if not cat:
+                continue
+            num = int(v.get("numero", 0))
+            importo = quota.get("importo", 0)
+            s = stats[cat]
+            s["totale_vincite"] += num
+            s["totale_importo"] += num * importo
+            if num > 0:
+                s["con_vincita"] += 1
+                if s["quota_min"] is None or importo < s["quota_min"]:
+                    s["quota_min"] = importo
+                if importo > s["quota_max"]:
+                    s["quota_max"] = importo
+                if cat == "5":
+                    case_vinte.append({
+                        "concorso": r["concorso"], "data": r["data"],
+                        "numeri": [r["n1"], r["n2"], r["n3"], r["n4"], r["n5"]],
+                        "vincitori": num,
+                        "importo_euro": _fmt_importo(importo),
+                    })
+
+    tot = len(rows)
+    categorie = {}
+    for cat in ["5", "4", "3", "2"]:
+        s = stats[cat]
+        categorie[f"punti_{cat}"] = {
+            "totale_vincite": s["totale_vincite"],
+            "totale_distribuito_euro": _fmt_importo(s["totale_importo"]),
+            "estrazioni_con_vincita": s["con_vincita"],
+            "percentuale": round(s["con_vincita"] / tot * 100, 1) if tot else 0,
+            "quota_media_euro": _fmt_importo(round(s["totale_importo"] / s["totale_vincite"])) if s["totale_vincite"] else "0.00",
+            "quota_min_euro": _fmt_importo(s["quota_min"] or 0),
+            "quota_max_euro": _fmt_importo(s["quota_max"]),
+        }
+
+    base["statistiche_premi"] = categorie
+    base["case_vinte"] = {
+        "totale": sum(c["vincitori"] for c in case_vinte),
+        "estrazioni": sorted(case_vinte, key=lambda x: x["data"], reverse=True),
+    }
+    return base
+
+
+_vc_spia_cache = {"data": None, "result": None}
+
+
+def _vc_calcola_numeri_spia():
+    from collections import Counter
+    from itertools import combinations
+
+    with get_db_ctx() as conn:
+        rows = conn.execute("SELECT n1, n2, n3, n4, n5 FROM vincicasa").fetchall()
+
+    freq_singolo = Counter()
+    freq_coppia = Counter()
+
+    for r in rows:
+        numeri = sorted([r["n1"], r["n2"], r["n3"], r["n4"], r["n5"]])
+        for n in numeri:
+            freq_singolo[n] += 1
+        for coppia in combinations(numeri, 2):
+            freq_coppia[coppia] += 1
+
+    # Salva tutte le coppie ordinate (il top lo applica l'endpoint)
+    tutte = []
+    for (a, b), freq in freq_coppia.most_common():
+        tutte.append({
+            "numero_spia": a,
+            "numero_associato": b,
+            "frequenza_associazione": freq,
+            "percentuale": round(freq / freq_singolo[a] * 100, 1),
+        })
+
+    return {"totale_estrazioni": len(rows), "coppie": tutte}
+
+
+@app.get("/api/vincicasa/numeri-spia")
+def vc_numeri_spia(top: int = Query(20, le=100)):
+    with get_db_ctx() as conn:
+        ultima = conn.execute("SELECT data FROM vincicasa ORDER BY data DESC LIMIT 1").fetchone()
+    ultima_data = ultima["data"] if ultima else None
+
+    if _vc_spia_cache["data"] != ultima_data:
+        _vc_spia_cache["result"] = _vc_calcola_numeri_spia()
+        _vc_spia_cache["data"] = ultima_data
+
+    cached = _vc_spia_cache["result"]
+    return {
+        "lotteria": "vincicasa",
+        "aggiornato_il": ultima_data,
+        "totale_estrazioni": cached["totale_estrazioni"],
+        "coppie": cached["coppie"][:top],
+    }
+
+
+_vc_combi_cache = {"data": None, "result": None}
+
+
+def _vc_calcola_combinazioni():
+    from collections import Counter
+    from itertools import combinations
+
+    with get_db_ctx() as conn:
+        rows = conn.execute("SELECT n1, n2, n3, n4, n5 FROM vincicasa").fetchall()
+
+    freq_coppie = Counter()
+    freq_terni = Counter()
+
+    for r in rows:
+        numeri = sorted([r["n1"], r["n2"], r["n3"], r["n4"], r["n5"]])
+        for coppia in combinations(numeri, 2):
+            freq_coppie[coppia] += 1
+        for terno in combinations(numeri, 3):
+            freq_terni[terno] += 1
+
+    coppie = [{"numeri": list(k), "frequenza": v} for k, v in freq_coppie.most_common(15)]
+    terni = [{"numeri": list(k), "frequenza": v} for k, v in freq_terni.most_common(10)]
+
+    return {"estrazioni_analizzate": len(rows), "coppie": coppie, "terni": terni}
+
+
+@app.get("/api/vincicasa/combinazioni")
+def vc_combinazioni():
+    with get_db_ctx() as conn:
+        ultima = conn.execute("SELECT data FROM vincicasa ORDER BY data DESC LIMIT 1").fetchone()
+    ultima_data = ultima["data"] if ultima else None
+
+    if _vc_combi_cache["data"] != ultima_data:
+        _vc_combi_cache["result"] = _vc_calcola_combinazioni()
+        _vc_combi_cache["data"] = ultima_data
+
+    cached = _vc_combi_cache["result"]
+    return {
+        "coppie": cached["coppie"],
+        "terni": cached["terni"],
+        "estrazioni_analizzate": cached["estrazioni_analizzate"],
+        "aggiornato_il": ultima_data,
+    }
 
 
 # ── Eurojackpot ─────────────────────────────────────────────
+
+
+def _ej_row_to_dict(r) -> dict:
+    """Converte una riga DB eurojackpot in dict, con vincite se presenti."""
+    d = {
+        "concorso": r["concorso"], "data": r["data"],
+        "numeri": [r["n1"], r["n2"], r["n3"], r["n4"], r["n5"]],
+        "euronumeri": [r["e1"], r["e2"]],
+    }
+    vincite_raw = r["vincite_json"]
+    if vincite_raw:
+        det = _json.loads(vincite_raw)
+        d["vincite"] = _parse_vincite_gntn(det.get("vincite", []))
+        d["totale_vincite"] = int(det.get("numeroTotaleVincite", 0))
+    return d
+
 
 @app.get("/api/eurojackpot/ultima")
 def ej_ultima():
@@ -565,12 +770,90 @@ def ej_ultima():
         row = conn.execute("SELECT * FROM eurojackpot ORDER BY data DESC LIMIT 1").fetchone()
     if not row:
         return {"errore": "Nessuna estrazione"}
-    return {
+    return {"lotteria": "eurojackpot", **_ej_row_to_dict(row)}
+
+
+_ej_paese_cache: dict = {"payload": None, "ts": 0.0}
+_EJ_PAESE_TTL = 300  # 5 minuti
+
+
+@app.get("/api/eurojackpot/vincite-per-paese")
+def ej_vincite_per_paese():
+    import time
+    import requests as _req
+
+    now = time.time()
+    if _ej_paese_cache["payload"] and now - _ej_paese_cache["ts"] < _EJ_PAESE_TTL:
+        return _ej_paese_cache["payload"]
+
+    url = (
+        "https://www.eurojackpot.com/wlinfo/WL_InfoService"
+        "?client=jsn&gruppe=ZahlenUndQuoten&ewGewsum=ja&spielart=EJ&lang=en"
+    )
+    try:
+        resp = _req.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        resp.raise_for_status()
+        raw = resp.json()
+    except Exception as ex:
+        return {"errore": f"Impossibile recuperare i dati: {ex}"}
+
+    head = raw.get("head", {})
+    ziehungen_numeri = raw.get("zahlen", {}).get("hauptlotterie", {}).get("ziehungen", [])
+
+    numeri, euronumeri = [], []
+    for z in ziehungen_numeri:
+        bezeichnung = z.get("bezeichnung", "")
+        if "50" in bezeichnung:
+            numeri = [int(n) for n in z.get("zahlenSortiert", [])]
+        elif "12" in bezeichnung:
+            euronumeri = [int(n) for n in z.get("zahlenSortiert", [])]
+
+    klassen_raw = (
+        raw.get("auswertung", {})
+           .get("quoten", {})
+           .get("hauptlotterie", {})
+           .get("ziehungen", [{}])[0]
+           .get("gewinnklassen", [])
+    )
+
+    vincite = []
+    for k in klassen_raw:
+        aufteilung = k.get("aufteilung")
+        entry = {
+            "klasse": k["klasse"],
+            "descrizione": k["beschreibung"],
+            "abbreviazione": k["kurzbeschreibung"],
+            "totale_vincitori": k["anzahl"],
+            "vincita_euro": k["quote"],
+        }
+        if k.get("jackpot"):
+            entry["jackpot_euro"] = k["jackpot"]
+        if aufteilung is not None:
+            entry["per_paese"] = [
+                {
+                    "paese": a["land"],
+                    "alpha3": a["landAlpha3"],
+                    "provincia": a.get("provinz"),
+                    "provincia_iso": a.get("provinzIsoCode"),
+                    "vincitori": a["anzahl"],
+                }
+                for a in aufteilung
+            ]
+        vincite.append(entry)
+
+    payload = {
         "lotteria": "eurojackpot",
-        "concorso": row["concorso"], "data": row["data"],
-        "numeri": [row["n1"], row["n2"], row["n3"], row["n4"], row["n5"]],
-        "euronumeri": [row["e1"], row["e2"]],
+        "data": head.get("datum"),
+        "numeri": numeri,
+        "euronumeri": euronumeri,
+        "vincite": vincite,
+        "aggiornato_il": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "fonte": "eurojackpot.com",
     }
+
+    _ej_paese_cache["payload"] = payload
+    _ej_paese_cache["ts"] = now
+    return payload
 
 
 @app.get("/api/eurojackpot/archivio")
@@ -585,7 +868,8 @@ def ej_archivio(anno: Optional[int] = None, limit: int = Query(100, le=10000), o
         else:
             rows = conn.execute("SELECT * FROM eurojackpot ORDER BY data DESC LIMIT ? OFFSET ?", (limit, offset)).fetchall()
             totale = conn.execute("SELECT COUNT(*) FROM eurojackpot").fetchone()[0]
-    return {"lotteria": "eurojackpot", "totale": totale, "limit": limit, "offset": offset, "estrazioni": rows_to_list(rows)}
+    return {"lotteria": "eurojackpot", "totale": totale, "limit": limit, "offset": offset,
+            "estrazioni": [_ej_row_to_dict(r) for r in rows]}
 
 
 @app.get("/api/eurojackpot/ultime")
@@ -594,17 +878,340 @@ def ej_ultime(n: int = Query(10, le=100)):
         rows = conn.execute("SELECT * FROM eurojackpot ORDER BY data DESC LIMIT ?", (n,)).fetchall()
     return {
         "lotteria": "eurojackpot",
-        "estrazioni": [{
-            "concorso": r["concorso"], "data": r["data"],
-            "numeri": [r["n1"], r["n2"], r["n3"], r["n4"], r["n5"]],
-            "euronumeri": [r["e1"], r["e2"]],
-        } for r in rows]
+        "estrazioni": [_ej_row_to_dict(r) for r in rows]
     }
 
 
 @app.get("/api/eurojackpot/statistiche")
 def ej_stats():
-    return get_stats("eurojackpot")
+    with get_db_ctx() as conn:
+        totale = conn.execute("SELECT COUNT(*) FROM eurojackpot").fetchone()[0]
+        numeri_rows = conn.execute(
+            "SELECT * FROM statistiche WHERE lotteria = 'eurojackpot' ORDER BY numero ASC"
+        ).fetchall()
+        euro_rows = conn.execute(
+            "SELECT * FROM statistiche WHERE lotteria = 'eurojackpot_euro' ORDER BY numero ASC"
+        ).fetchall()
+
+    if not numeri_rows:
+        return {"errore": "Statistiche non calcolate"}
+
+    numeri = rows_to_list(numeri_rows)
+    euro = rows_to_list(euro_rows)
+
+    aggiornato_al = numeri[0]["aggiornato_il"].split(" ")[0] if numeri[0].get("aggiornato_il") else None
+
+    top_rit = sorted(numeri, key=lambda x: x["ritardo_attuale"], reverse=True)[:10]
+    top_freq = sorted(numeri, key=lambda x: x["frequenza"], reverse=True)[:10]
+    top_euro = sorted(euro, key=lambda x: x["frequenza"], reverse=True)[:5]
+
+    # Distribuzione decine
+    fasce = [(1, 10), (11, 20), (21, 30), (31, 40), (41, 50)]
+    totale_freq = sum(n["frequenza"] for n in numeri)
+    distribuzione = []
+    for lo, hi in fasce:
+        count = sum(n["frequenza"] for n in numeri if lo <= n["numero"] <= hi)
+        distribuzione.append({
+            "range": f"{lo}-{hi}",
+            "count": count,
+            "percentuale": round(count / totale_freq * 100, 1) if totale_freq else 0,
+        })
+
+    return {
+        "lotteria": "eurojackpot",
+        "aggiornato_al": aggiornato_al,
+        "totale_estrazioni": totale,
+        "top_ritardatari": [{"numero": n["numero"], "ritardo": n["ritardo_attuale"]} for n in top_rit],
+        "top_frequenti": [{"numero": n["numero"], "frequenza": n["frequenza"]} for n in top_freq],
+        "top_euro_frequenti": [{"numero": n["numero"], "frequenza": n["frequenza"]} for n in top_euro],
+        "distribuzione_decine": distribuzione,
+    }
+
+
+@app.get("/api/eurojackpot/tabellone")
+def ej_tabellone():
+    with get_db_ctx() as conn:
+        totale = conn.execute("SELECT COUNT(*) FROM eurojackpot").fetchone()[0]
+        numeri_rows = conn.execute(
+            "SELECT * FROM statistiche WHERE lotteria = 'eurojackpot' ORDER BY numero ASC"
+        ).fetchall()
+        euro_rows = conn.execute(
+            "SELECT * FROM statistiche WHERE lotteria = 'eurojackpot_euro' ORDER BY numero ASC"
+        ).fetchall()
+
+    if not numeri_rows:
+        return {"errore": "Statistiche non calcolate"}
+
+    aggiornato_al = numeri_rows[0]["aggiornato_il"].split(" ")[0] if numeri_rows[0]["aggiornato_il"] else None
+
+    def _tab_row(r):
+        return {"numero": r["numero"], "frequenza": r["frequenza"],
+                "ritardo": r["ritardo_attuale"], "ritardo_max": r["ritardo_max"]}
+
+    return {
+        "lotteria": "eurojackpot",
+        "aggiornato_al": aggiornato_al,
+        "totale_estrazioni": totale,
+        "numeri": [_tab_row(r) for r in numeri_rows],
+        "euronumeri": [_tab_row(r) for r in euro_rows],
+    }
+
+
+_ej_freq_cache = {"data": None, "result": None}
+
+
+def _ej_calcola_combinazioni():
+    from collections import Counter
+    from itertools import combinations
+
+    with get_db_ctx() as conn:
+        rows = conn.execute("SELECT n1, n2, n3, n4, n5 FROM eurojackpot").fetchall()
+
+    freq_coppie = Counter()
+    freq_quaterne = Counter()
+
+    for r in rows:
+        numeri = tuple(sorted([r["n1"], r["n2"], r["n3"], r["n4"], r["n5"]]))
+        for coppia in combinations(numeri, 2):
+            freq_coppie[coppia] += 1
+        for quaterna in combinations(numeri, 4):
+            freq_quaterne[quaterna] += 1
+
+    coppie = [{"coppia": list(k), "frequenza": v} for k, v in freq_coppie.most_common(10)]
+    quaterne = [{"quaterna": list(k), "frequenza": v} for k, v in freq_quaterne.most_common(5)]
+
+    return {"coppie": coppie, "quaterne": quaterne}
+
+
+@app.get("/api/eurojackpot/numeri-frequenti")
+def ej_numeri_frequenti():
+    with get_db_ctx() as conn:
+        totale = conn.execute("SELECT COUNT(*) FROM eurojackpot").fetchone()[0]
+        numeri_rows = conn.execute(
+            "SELECT * FROM statistiche WHERE lotteria = 'eurojackpot' ORDER BY frequenza DESC"
+        ).fetchall()
+        euro_rows = conn.execute(
+            "SELECT * FROM statistiche WHERE lotteria = 'eurojackpot_euro' ORDER BY frequenza DESC"
+        ).fetchall()
+        ultima = conn.execute("SELECT data FROM eurojackpot ORDER BY data DESC LIMIT 1").fetchone()
+
+    if not numeri_rows:
+        return {"errore": "Statistiche non calcolate"}
+
+    ultima_data = ultima["data"] if ultima else None
+    aggiornato_al = numeri_rows[0]["aggiornato_il"].split(" ")[0] if numeri_rows[0]["aggiornato_il"] else None
+
+    if _ej_freq_cache["data"] != ultima_data:
+        _ej_freq_cache["result"] = _ej_calcola_combinazioni()
+        _ej_freq_cache["data"] = ultima_data
+
+    cached = _ej_freq_cache["result"]
+
+    return {
+        "lotteria": "eurojackpot",
+        "aggiornato_al": aggiornato_al,
+        "totale_estrazioni": totale,
+        "numeri": [{"numero": r["numero"], "frequenza": r["frequenza"]} for r in numeri_rows],
+        "euronumeri": [{"numero": r["numero"], "frequenza": r["frequenza"]} for r in euro_rows],
+        "coppie": cached["coppie"],
+        "quaterne": cached["quaterne"],
+    }
+
+
+_ej_ambi_cache = {"data": None, "result": None}
+
+
+def _ej_calcola_ambi_ritardatari():
+    from itertools import combinations
+
+    with get_db_ctx() as conn:
+        rows = conn.execute(
+            "SELECT data, n1, n2, n3, n4, n5 FROM eurojackpot ORDER BY data ASC"
+        ).fetchall()
+
+    ultima_coppia = {}
+
+    for idx, r in enumerate(rows):
+        numeri = tuple(sorted([r["n1"], r["n2"], r["n3"], r["n4"], r["n5"]]))
+        for coppia in combinations(numeri, 2):
+            ultima_coppia[coppia] = (idx, r["data"])
+
+    totale = len(rows)
+    ambi = []
+    for coppia, (last_idx, last_data) in ultima_coppia.items():
+        ritardo = totale - 1 - last_idx
+        if ritardo > 0:
+            ambi.append({
+                "coppia": list(coppia),
+                "ritardo": ritardo,
+                "ultima_estrazione": last_data,
+            })
+
+    ambi.sort(key=lambda x: x["ritardo"], reverse=True)
+    return ambi[:10]
+
+
+@app.get("/api/eurojackpot/numeri-ritardatari")
+def ej_numeri_ritardatari():
+    with get_db_ctx() as conn:
+        totale = conn.execute("SELECT COUNT(*) FROM eurojackpot").fetchone()[0]
+        numeri_rows = conn.execute(
+            "SELECT * FROM statistiche WHERE lotteria = 'eurojackpot' ORDER BY ritardo_attuale DESC"
+        ).fetchall()
+        euro_rows = conn.execute(
+            "SELECT * FROM statistiche WHERE lotteria = 'eurojackpot_euro' ORDER BY ritardo_attuale DESC"
+        ).fetchall()
+        ultima = conn.execute("SELECT data FROM eurojackpot ORDER BY data DESC LIMIT 1").fetchone()
+
+    if not numeri_rows:
+        return {"errore": "Statistiche non calcolate"}
+
+    ultima_data = ultima["data"] if ultima else None
+    aggiornato_al = numeri_rows[0]["aggiornato_il"].split(" ")[0] if numeri_rows[0]["aggiornato_il"] else None
+
+    if _ej_ambi_cache["data"] != ultima_data:
+        _ej_ambi_cache["result"] = _ej_calcola_ambi_ritardatari()
+        _ej_ambi_cache["data"] = ultima_data
+
+    def _rit_row(r):
+        return {
+            "numero": r["numero"],
+            "ritardo": r["ritardo_attuale"],
+            "ritardo_max": r["ritardo_max"],
+            "ultima_estrazione": r["ultima_data"],
+        }
+
+    return {
+        "lotteria": "eurojackpot",
+        "aggiornato_al": aggiornato_al,
+        "totale_estrazioni": totale,
+        "numeri": [_rit_row(r) for r in numeri_rows[:20]],
+        "euronumeri": [_rit_row(r) for r in euro_rows],
+        "ambi": _ej_ambi_cache["result"],
+    }
+
+
+_ej_spia_cache = {"data": None, "result": None}
+
+
+def _ej_calcola_numeri_spia():
+    from collections import Counter
+
+    with get_db_ctx() as conn:
+        rows = conn.execute(
+            "SELECT n1, n2, n3, n4, n5 FROM eurojackpot ORDER BY data ASC"
+        ).fetchall()
+
+    totale = len(rows)
+    spia_counts = {}
+
+    for i in range(totale - 1):
+        numeri_corrente = set([rows[i]["n1"], rows[i]["n2"], rows[i]["n3"], rows[i]["n4"], rows[i]["n5"]])
+        numeri_successivo = set([rows[i+1]["n1"], rows[i+1]["n2"], rows[i+1]["n3"], rows[i+1]["n4"], rows[i+1]["n5"]])
+
+        for n in numeri_corrente:
+            if n not in spia_counts:
+                spia_counts[n] = Counter()
+            for s in numeri_successivo:
+                if s != n:
+                    spia_counts[n][s] += 1
+
+    risultati = []
+    for numero, counter in spia_counts.items():
+        top5 = counter.most_common(5)
+        if not top5:
+            continue
+        spiati = [s for s, _ in top5]
+        hit = 0
+        idx = 0
+        for i in range(totale - 1):
+            numeri_corrente = set([rows[i]["n1"], rows[i]["n2"], rows[i]["n3"], rows[i]["n4"], rows[i]["n5"]])
+            if numero not in numeri_corrente:
+                continue
+            numeri_successivo = set([rows[i+1]["n1"], rows[i+1]["n2"], rows[i+1]["n3"], rows[i+1]["n4"], rows[i+1]["n5"]])
+            if numeri_successivo & set(spiati):
+                hit += 1
+            idx += 1
+        affidabilita = round(hit / idx * 100) if idx > 0 else 0
+        risultati.append({
+            "numero": numero,
+            "spiati": spiati,
+            "affidabilita": affidabilita,
+        })
+
+    risultati.sort(key=lambda x: x["affidabilita"], reverse=True)
+    return {"totale_estrazioni": totale, "spia": risultati[:20]}
+
+
+@app.get("/api/eurojackpot/numeri-spia")
+def ej_numeri_spia():
+    with get_db_ctx() as conn:
+        ultima = conn.execute("SELECT data FROM eurojackpot ORDER BY data DESC LIMIT 1").fetchone()
+    ultima_data = ultima["data"] if ultima else None
+
+    if _ej_spia_cache["data"] != ultima_data:
+        _ej_spia_cache["result"] = _ej_calcola_numeri_spia()
+        _ej_spia_cache["data"] = ultima_data
+
+    cached = _ej_spia_cache["result"]
+    return {
+        "lotteria": "eurojackpot",
+        "aggiornato_al": ultima_data,
+        "totale_estrazioni": cached["totale_estrazioni"],
+        "spia": cached["spia"],
+    }
+
+
+@app.get("/api/eurojackpot/previsioni")
+def ej_previsioni():
+    from datetime import date, timedelta
+
+    with get_db_ctx() as conn:
+        numeri_rows = conn.execute(
+            "SELECT * FROM statistiche WHERE lotteria = 'eurojackpot' ORDER BY numero ASC"
+        ).fetchall()
+        euro_rows = conn.execute(
+            "SELECT * FROM statistiche WHERE lotteria = 'eurojackpot_euro' ORDER BY numero ASC"
+        ).fetchall()
+
+    if not numeri_rows:
+        return {"errore": "Statistiche non calcolate"}
+
+    aggiornato_al = numeri_rows[0]["aggiornato_il"].split(" ")[0] if numeri_rows[0]["aggiornato_il"] else None
+
+    def _con_indice(r):
+        rm = r["ritardo_max"]
+        indice = round(r["ritardo_attuale"] / rm * 100) if rm > 0 else 0
+        return {
+            "numero": r["numero"],
+            "frequenza": r["frequenza"],
+            "ritardo": r["ritardo_attuale"],
+            "ritardo_max": rm,
+            "indice": indice,
+        }
+
+    analisi_numeri = sorted([_con_indice(r) for r in numeri_rows], key=lambda x: x["indice"], reverse=True)
+    analisi_euro = sorted([_con_indice(r) for r in euro_rows], key=lambda x: x["indice"], reverse=True)
+
+    oggi = date.today()
+    prossima = None
+    for delta in range(1, 8):
+        giorno = oggi + timedelta(days=delta)
+        if giorno.weekday() in (1, 4):
+            prossima = giorno.isoformat()
+            break
+
+    return {
+        "lotteria": "eurojackpot",
+        "aggiornato_al": aggiornato_al,
+        "prossima_estrazione": prossima,
+        "consigliati": {
+            "numeri": [n["numero"] for n in analisi_numeri[:5]],
+            "euronumeri": [n["numero"] for n in analisi_euro[:2]],
+        },
+        "analisi_numeri": analisi_numeri[:10],
+        "analisi_euronumeri": analisi_euro[:5],
+    }
 
 
 # ── SiVinceTutto ────────────────────────────────────────────

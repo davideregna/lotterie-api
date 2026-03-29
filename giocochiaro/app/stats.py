@@ -104,6 +104,10 @@ def calcola_eurojackpot():
     calcola_stats("eurojackpot", "eurojackpot", 50, "n1, n2, n3, n4, n5")
 
 
+def calcola_eurojackpot_euronumeri():
+    calcola_stats("eurojackpot_euro", "eurojackpot", 12, "e1, e2")
+
+
 def calcola_sivincetutto():
     calcola_stats("sivincetutto", "sivincetutto", 90, "n1, n2, n3, n4, n5, n6")
 
@@ -131,6 +135,7 @@ def calcola_tutte():
     calcola_diecelotto()
     calcola_vincicasa()
     calcola_eurojackpot()
+    calcola_eurojackpot_euronumeri()
     calcola_sivincetutto()
     calcola_winforlife_classico()
     calcola_winforlife_grattacieli()
