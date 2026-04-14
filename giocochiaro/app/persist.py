@@ -42,11 +42,14 @@ def salva_live(e) -> None:
 
     with get_db_ctx() as conn:
         row = conn.execute(
-            "SELECT raw_json FROM live_data WHERE gioco = ?", (e.gioco,)
+            "SELECT raw_json, data FROM live_data WHERE gioco = ?", (e.gioco,)
         ).fetchone()
 
-        if row and json.loads(row["raw_json"]) == e.raw_data:
-            return
+        if row:
+            if json.loads(row["raw_json"]) == e.raw_data:
+                return
+            if data and row["data"] and data < row["data"]:
+                return
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         conn.execute("""
@@ -101,13 +104,21 @@ def salva_superenalotto(e) -> bool:
     if not data:
         return False
 
+    raw = e.raw_data or {}
+    jackpot = raw.get("jackpot", 0)
+    montepremi = raw.get("montepremi")
+    det_vincite = raw.get("dettaglioVincite")
+    montepremi_json = json.dumps(montepremi, ensure_ascii=False) if montepremi else None
+    vincite_json = json.dumps(det_vincite, ensure_ascii=False) if det_vincite else None
+
     with get_db_ctx() as conn:
         c = conn.cursor()
         c.execute("""
             INSERT OR IGNORE INTO superenalotto
-            (concorso, data, n1, n2, n3, n4, n5, n6, jolly, superstar)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (_concorso_int(e.concorso), data, *e.numeri, e.jolly or 0, e.superstar or 0))
+            (concorso, data, n1, n2, n3, n4, n5, n6, jolly, superstar, jackpot, montepremi_json, vincite_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (_concorso_int(e.concorso), data, *e.numeri, e.jolly or 0, e.superstar or 0,
+              jackpot, montepremi_json, vincite_json))
         conn.commit()
         return c.rowcount > 0
 
@@ -161,12 +172,20 @@ def salva_vincicasa(e) -> bool:
     if not data:
         return False
 
+    raw = e.raw_data or {}
+    dc = raw.get("dettaglioConcorso") or raw
+    montepremi = dc.get("montepremi")
+    det_vincite = dc.get("dettaglioVincite")
+    montepremi_json = json.dumps(montepremi, ensure_ascii=False) if montepremi else None
+    vincite_json = json.dumps(det_vincite, ensure_ascii=False) if det_vincite else None
+
     with get_db_ctx() as conn:
         c = conn.cursor()
         c.execute("""
-            INSERT OR IGNORE INTO vincicasa (concorso, data, n1, n2, n3, n4, n5)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (_concorso_int(e.concorso), data, *e.numeri))
+            INSERT OR IGNORE INTO vincicasa
+            (concorso, data, n1, n2, n3, n4, n5, montepremi_json, vincite_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (_concorso_int(e.concorso), data, *e.numeri, montepremi_json, vincite_json))
         conn.commit()
         return c.rowcount > 0
 
@@ -178,12 +197,16 @@ def salva_eurojackpot(e) -> bool:
     if not data:
         return False
 
+    raw = e.raw_data or {}
+    det_vincite = raw.get("dettaglioVincite")
+    vincite_json = json.dumps(det_vincite, ensure_ascii=False) if det_vincite else None
+
     with get_db_ctx() as conn:
         c = conn.cursor()
         c.execute("""
-            INSERT OR IGNORE INTO eurojackpot (concorso, data, n1, n2, n3, n4, n5, e1, e2)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (_concorso_int(e.concorso), data, *e.numeri, *e.euronumeri))
+            INSERT OR IGNORE INTO eurojackpot (concorso, data, n1, n2, n3, n4, n5, e1, e2, vincite_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (_concorso_int(e.concorso), data, *e.numeri, *e.euronumeri, vincite_json))
         conn.commit()
         return c.rowcount > 0
 

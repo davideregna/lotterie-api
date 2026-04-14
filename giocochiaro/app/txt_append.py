@@ -101,6 +101,27 @@ def append_diecelotto(e):
     _append_line("10elotto.txt", f"{concorso}\t{data}\t{nums}\t{oro}\t{oro2}\t{extras}")
 
 
+_EJ_PRIZE_CATEGORIES = [
+    "5+2", "5+1", "5+0", "4+2", "4+1", "4+0",
+    "3+2", "2+2", "3+1", "3+0", "1+2", "2+1",
+]
+
+_EJ_DESC_TO_CAT = {
+    "CINQUE_PIU_DUE": "5+2",
+    "CINQUE_PIU_UNO": "5+1",
+    "CINQUE": "5+0",
+    "QUATTRO_PIU_DUE": "4+2",
+    "QUATTRO_PIU_UNO": "4+1",
+    "QUATTRO": "4+0",
+    "TRE_PIU_DUE": "3+2",
+    "DUE_PIU_DUE": "2+2",
+    "TRE_PIU_UNO": "3+1",
+    "TRE": "3+0",
+    "UNO_PIU_DUE": "1+2",
+    "DUE_PIU_UNO": "2+1",
+}
+
+
 def append_eurojackpot(e):
     if len(e.numeri) != 5 or len(e.euronumeri) != 2:
         return
@@ -110,7 +131,35 @@ def append_eurojackpot(e):
     concorso = e.concorso or "0"
     nums = "\t".join(str(n) for n in e.numeri)
     euros = "\t".join(str(n) for n in e.euronumeri)
-    _append_line("eurojackpot.txt", f"{concorso}\t{data}\t{nums}\t{euros}")
+
+    # Estrai vincite dal raw_data GNTN
+    raw = e.raw_data or {}
+    det_vincite = raw.get("dettaglioVincite") or {}
+    vincite_list = det_vincite.get("vincite", [])
+
+    prizes = {}
+    for v in vincite_list:
+        quota = v.get("quota", {})
+        cat_info = quota.get("categoriaVincita", {})
+        desc = cat_info.get("descrizione", "")
+        cat = _EJ_DESC_TO_CAT.get(desc)
+        if cat:
+            importo_cent = quota.get("importo", 0)
+            importo_eur = importo_cent / 100.0 if importo_cent else 0.0
+            vi = int(v.get("numeroItalia", 0) or 0)
+            vt = int(v.get("numero", 0) or 0)
+            prizes[cat] = (importo_eur, vi, vt)
+
+    prize_cols = []
+    for cat in _EJ_PRIZE_CATEGORIES:
+        if cat in prizes:
+            q, vi, vt = prizes[cat]
+            prize_cols.extend([f"{q:.2f}", str(vi), str(vt)])
+        else:
+            prize_cols.extend(["-", "-", "-"])
+
+    prize_str = "\t".join(prize_cols)
+    _append_line("eurojackpot.txt", f"{concorso}\t{data}\t{nums}\t{euros}\t{prize_str}")
 
 
 def append_vincicasa(e):
@@ -121,7 +170,31 @@ def append_vincicasa(e):
         return
     concorso = e.concorso or "0"
     nums = "\t".join(str(n) for n in e.numeri)
-    _append_line("vincicasa.txt", f"{concorso}\t{data}\t{nums}")
+
+    # Vincite dal raw_data (API gntn)
+    raw = e.raw_data or {}
+    dc = raw.get("dettaglioConcorso") or raw
+    det_vincite = dc.get("dettaglioVincite") or {}
+    vincite_list = det_vincite.get("vincite", [])
+
+    PREMIO_CASA = 50000000  # €500.000 fisso per Punti 5
+    cats = {5: (0, PREMIO_CASA), 4: (0, 0), 3: (0, 0), 2: (0, 0)}
+    tipo_to_cat = {"14": 5, "13": 4, "12": 3, "11": 2}
+    for v in vincite_list:
+        quota = v.get("quota", {})
+        cat_info = quota.get("categoriaVincita", {})
+        tipo = cat_info.get("tipo", "")
+        cat = tipo_to_cat.get(tipo)
+        if cat:
+            importo = quota.get("importo", 0)
+            if cat == 5:
+                importo = importo or PREMIO_CASA
+            cats[cat] = (int(v.get("numero", 0)), importo)
+
+    vincite_cols = "\t".join(
+        f"{cats[c][0]}\t{cats[c][1]}" for c in [5, 4, 3, 2]
+    )
+    _append_line("vincicasa.txt", f"{concorso}\t{data}\t{nums}\t{vincite_cols}")
 
 
 def append_sivincetutto(e):

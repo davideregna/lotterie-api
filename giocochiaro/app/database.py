@@ -49,9 +49,19 @@ def init_db():
                 n4 INTEGER NOT NULL, n5 INTEGER NOT NULL, n6 INTEGER NOT NULL,
                 jolly INTEGER DEFAULT 0,
                 superstar INTEGER DEFAULT 0,
+                jackpot INTEGER DEFAULT 0,
+                montepremi_json TEXT,
+                vincite_json TEXT,
                 UNIQUE(data)
             )
         """)
+
+        # Migrazione: aggiunge colonne se mancanti
+        for col, tipo in [("jackpot", "INTEGER DEFAULT 0"), ("montepremi_json", "TEXT"), ("vincite_json", "TEXT")]:
+            try:
+                c.execute(f"ALTER TABLE superenalotto ADD COLUMN {col} {tipo}")
+            except Exception:
+                pass
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS lotto (
@@ -89,6 +99,13 @@ def init_db():
             )
         """)
 
+        # Migrazione VinciCasa: aggiunge colonne vincite se mancanti
+        for col, tipo in [("montepremi_json", "TEXT"), ("vincite_json", "TEXT")]:
+            try:
+                c.execute(f"ALTER TABLE vincicasa ADD COLUMN {col} {tipo}")
+            except Exception:
+                pass
+
         c.execute("""
             CREATE TABLE IF NOT EXISTS eurojackpot (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,9 +114,16 @@ def init_db():
                 n1 INTEGER NOT NULL, n2 INTEGER NOT NULL, n3 INTEGER NOT NULL,
                 n4 INTEGER NOT NULL, n5 INTEGER NOT NULL,
                 e1 INTEGER NOT NULL, e2 INTEGER NOT NULL,
+                vincite_json TEXT,
                 UNIQUE(data)
             )
         """)
+
+        # Migrazione Eurojackpot: aggiunge colonna vincite se mancante
+        try:
+            c.execute("ALTER TABLE eurojackpot ADD COLUMN vincite_json TEXT")
+        except Exception:
+            pass
 
         c.execute("""
             CREATE TABLE IF NOT EXISTS sivincetutto (

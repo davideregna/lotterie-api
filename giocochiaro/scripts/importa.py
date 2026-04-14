@@ -108,6 +108,20 @@ def _parse_se_txt(filepath):
                 risultati.append((0, data, *numeri, jolly, superstar))
             except (ValueError, IndexError):
                 continue
+
+    # Calcola il numero concorso progressivo per anno
+    risultati.sort(key=lambda r: r[1])  # ordina per data
+    anno_corrente = None
+    contatore = 0
+    for i, r in enumerate(risultati):
+        anno = r[1][:4]
+        if anno != anno_corrente:
+            anno_corrente = anno
+            contatore = 1
+        else:
+            contatore += 1
+        risultati[i] = (contatore, *r[1:])
+
     return risultati
 
 
@@ -161,6 +175,7 @@ def importa_superenalotto():
     with get_db_ctx() as conn:
         c = conn.cursor()
         importati = 0
+        aggiornati = 0
 
         for i in range(0, len(tutti), BATCH_SIZE):
             batch = tutti[i:i + BATCH_SIZE]
@@ -171,11 +186,19 @@ def importa_superenalotto():
             """, batch)
             importati += c.rowcount
 
+        # Aggiorna concorso per le righe che lo hanno a 0
+        for row in tutti:
+            concorso, data = row[0], row[1]
+            if concorso > 0:
+                c.execute("UPDATE superenalotto SET concorso = ? WHERE data = ? AND concorso = 0",
+                          (concorso, data))
+                aggiornati += c.rowcount
+
         conn.commit()
         totale = c.execute("SELECT COUNT(*) FROM superenalotto").fetchone()[0]
 
     duplicati = len(tutti) - importati
-    print(f"SuperEnalotto: {importati} importate, {duplicati} duplicate, {totale} totali nel DB.")
+    print(f"SuperEnalotto: {importati} importate, {duplicati} duplicate, {aggiornati} concorsi aggiornati, {totale} totali nel DB.")
 
 
 def importa_lotto():
@@ -317,15 +340,94 @@ def importa_diecelotto():
     print(f"10eLotto: {importati} importate, {totale} totali nel DB.")
 
 
+_EJ_PRIZE_CATEGORIES = [
+    "5+2", "5+1", "5+0", "4+2", "4+1", "4+0",
+    "3+2", "2+2", "3+1", "3+0", "1+2", "2+1",
+]
+
+_EJ_CAT_DESCS = {
+    "5+2": "CINQUE_PIU_DUE",
+    "5+1": "CINQUE_PIU_UNO",
+    "5+0": "CINQUE",
+    "4+2": "QUATTRO_PIU_DUE",
+    "4+1": "QUATTRO_PIU_UNO",
+    "4+0": "QUATTRO",
+    "3+2": "TRE_PIU_DUE",
+    "2+2": "DUE_PIU_DUE",
+    "3+1": "TRE_PIU_UNO",
+    "3+0": "TRE",
+    "1+2": "UNO_PIU_DUE",
+    "2+1": "DUE_PIU_UNO",
+}
+
+
+def _build_eurojackpot_vincite_json(parts):
+    """Costruisce vincite_json dalle 36 colonne premio (Q,VI,VT x 12 categorie).
+
+    Le colonne iniziano da parts[9] (dopo Concorso, Data, N1-5, EN1-2).
+    Formato: Q5+2 VI5+2 VT5+2 Q5+1 VI5+1 VT5+1 ...
+    Quote nel txt sono in EUR, le convertiamo in centesimi per compatibilità GNTN.
+    """
+    import json
+
+    if len(parts) < 45:  # 9 base + 36 premi
+        return None
+
+    vincite = []
+    totale_vincite = 0
+    importo_totale = 0
+
+    for i, cat in enumerate(_EJ_PRIZE_CATEGORIES):
+        col_base = 9 + i * 3
+        q_str = parts[col_base].strip()
+        vi_str = parts[col_base + 1].strip()
+        vt_str = parts[col_base + 2].strip()
+
+        if q_str == "-" or not q_str:
+            continue
+
+        try:
+            quota_eur = float(q_str)
+            vi = int(vi_str) if vi_str != "-" else 0
+            vt = int(vt_str) if vt_str != "-" else 0
+        except ValueError:
+            continue
+
+        importo_cent = round(quota_eur * 100)
+
+        vincite.append({
+            "quota": {
+                "categoriaVincita": {"tipo": cat, "descrizione": _EJ_CAT_DESCS[cat]},
+                "importo": importo_cent,
+            },
+            "numero": str(vt),
+            "numeroItalia": str(vi),
+        })
+        totale_vincite += vt
+        importo_totale += vt * importo_cent
+
+    if not vincite:
+        return None
+
+    return json.dumps({
+        "vincite": vincite,
+        "numeroTotaleVincite": totale_vincite,
+        "importoTotaleVincite": importo_totale,
+    }, ensure_ascii=False)
+
+
 def importa_eurojackpot():
     filepath = os.path.join(DATA_DIR, "eurojackpot.txt")
     if not os.path.exists(filepath):
         print("data/eurojackpot.txt non trovato, skip.")
         return
 
+    from datetime import datetime
+
     with get_db_ctx() as conn:
         c = conn.cursor()
         batch = []
+        vincite_updates = []
         importati = 0
 
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
@@ -339,12 +441,18 @@ def importa_eurojackpot():
                 try:
                     concorso = int(parts[0].strip())
                     data_raw = parts[1].strip()
-                    from datetime import datetime
                     data = datetime.strptime(data_raw, "%d/%m/%Y").strftime("%Y-%m-%d")
                     numeri = [int(parts[2 + i].strip()) for i in range(5)]
                     e1 = int(parts[7].strip())
                     e2 = int(parts[8].strip())
                     batch.append((concorso, data, *numeri, e1, e2))
+
+                    # Colonne vincite (opzionali, dal nuovo formato arricchito)
+                    if len(parts) >= 45:
+                        vincite_json = _build_eurojackpot_vincite_json(parts)
+                        if vincite_json:
+                            vincite_updates.append((vincite_json, data))
+
                     if len(batch) >= BATCH_SIZE:
                         c.executemany("""
                             INSERT OR IGNORE INTO eurojackpot
@@ -364,10 +472,61 @@ def importa_eurojackpot():
             """, batch)
             importati += c.rowcount
 
+        # Aggiorna vincite per le righe che le hanno
+        aggiornati = 0
+        for vincite_json, data in vincite_updates:
+            c.execute("""
+                UPDATE eurojackpot SET vincite_json = ?
+                WHERE data = ?
+            """, (vincite_json, data))
+            aggiornati += c.rowcount
+
         conn.commit()
         totale = c.execute("SELECT COUNT(*) FROM eurojackpot").fetchone()[0]
 
-    print(f"Eurojackpot: {importati} importate, {totale} totali nel DB.")
+    print(f"Eurojackpot: {importati} importate, {aggiornati} vincite aggiornate, {totale} totali nel DB.")
+
+
+def _build_vincicasa_vincite_json(parts):
+    """Costruisce montepremi_json e vincite_json dalle colonne V5,Q5,V4,Q4,V3,Q3,V2,Q2."""
+    import json
+    try:
+        v5, q5 = int(parts[7]), int(parts[8])
+        v4, q4 = int(parts[9]), int(parts[10])
+        v3, q3 = int(parts[11]), int(parts[12])
+        v2, q2 = int(parts[13]), int(parts[14])
+    except (ValueError, IndexError):
+        return None, None
+
+    if v5 == 0 and q5 == 0 and v4 == 0 and q4 == 0:
+        return None, None
+
+    vincite = []
+    for tipo, desc, num, quota in [
+        ("14", "CINQUE", v5, q5),
+        ("13", "QUATTRO", v4, q4),
+        ("12", "TRE", v3, q3),
+        ("11", "DUE", v2, q2),
+    ]:
+        vincite.append({
+            "quota": {
+                "categoriaVincita": {"tipo": tipo, "descrizione": desc},
+                "importo": quota
+            },
+            "numero": str(num)
+        })
+
+    totale_vincite = v5 + v4 + v3 + v2
+    importo_totale = v5 * q5 + v4 * q4 + v3 * q3 + v2 * q2
+
+    montepremi_json = json.dumps({"montepremiTotale": importo_totale}, ensure_ascii=False)
+    vincite_json = json.dumps({
+        "vincite": vincite,
+        "numeroTotaleVincite": totale_vincite,
+        "importoTotaleVincite": importo_totale,
+    }, ensure_ascii=False)
+
+    return montepremi_json, vincite_json
 
 
 def importa_vincicasa():
@@ -376,9 +535,12 @@ def importa_vincicasa():
         print("data/vincicasa.txt non trovato, skip.")
         return
 
+    from datetime import datetime
+
     with get_db_ctx() as conn:
         c = conn.cursor()
-        batch = []
+        batch_base = []
+        vincite_updates = []
         importati = 0
 
         with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
@@ -392,33 +554,49 @@ def importa_vincicasa():
                 try:
                     concorso = int(parts[0].strip())
                     data_raw = parts[1].strip()
-                    from datetime import datetime
                     data = datetime.strptime(data_raw, "%d/%m/%Y").strftime("%Y-%m-%d")
                     numeri = [int(parts[2 + i].strip()) for i in range(5)]
-                    batch.append((concorso, data, *numeri))
-                    if len(batch) >= BATCH_SIZE:
+
+                    batch_base.append((concorso, data, *numeri))
+
+                    # Colonne vincite (opzionali, dal nuovo formato)
+                    if len(parts) >= 15 and parts[7].strip():
+                        montepremi_json, vincite_json = _build_vincicasa_vincite_json(parts)
+                        if montepremi_json:
+                            vincite_updates.append((montepremi_json, vincite_json, data))
+
+                    if len(batch_base) >= BATCH_SIZE:
                         c.executemany("""
                             INSERT OR IGNORE INTO vincicasa
                             (concorso, data, n1, n2, n3, n4, n5)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, batch)
+                        """, batch_base)
                         importati += c.rowcount
-                        batch.clear()
+                        batch_base.clear()
                 except (ValueError, IndexError):
                     continue
 
-        if batch:
+        if batch_base:
             c.executemany("""
                 INSERT OR IGNORE INTO vincicasa
                 (concorso, data, n1, n2, n3, n4, n5)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, batch)
+            """, batch_base)
             importati += c.rowcount
+
+        # Aggiorna vincite per le righe che le hanno
+        aggiornati = 0
+        for montepremi_json, vincite_json, data in vincite_updates:
+            c.execute("""
+                UPDATE vincicasa SET montepremi_json = ?, vincite_json = ?
+                WHERE data = ? AND vincite_json IS NULL
+            """, (montepremi_json, vincite_json, data))
+            aggiornati += c.rowcount
 
         conn.commit()
         totale = c.execute("SELECT COUNT(*) FROM vincicasa").fetchone()[0]
 
-    print(f"VinciCasa: {importati} importate, {totale} totali nel DB.")
+    print(f"VinciCasa: {importati} importate, {aggiornati} vincite aggiornate, {totale} totali nel DB.")
 
 
 def importa_sivincetutto():
